@@ -18,11 +18,7 @@ var ErrAlreadyReviewed = errors.New("proctor event already reviewed")
 
 // proctorEventDedupWindow is the interval in which repeated reports of the
 // same attempt and type are merged into the first stored event.
-const proctorEventDedupWindow = 30 * time.Second
-
-// proctorEventDedupWindowSeconds is the dedup window in seconds, used to
-// bucket reports for the unique index that guards concurrent inserts.
-const proctorEventDedupWindowSeconds = int64(proctorEventDedupWindow / time.Second)
+const proctorEventDedupWindow = time.Duration(constants.ProctorDedupWindowSeconds) * time.Second
 
 // ProctorService is the review center for anti-cheating events: students
 // report events during an exam, teachers handle events of their own exams,
@@ -74,7 +70,7 @@ func (s *ProctorService) Report(ctx context.Context, studentID uint, req dto.Pro
 		Detail:       req.Detail,
 		Status:       constants.ProctorStatusPending,
 		OccurredAt:   now,
-		WindowBucket: now.Unix() / proctorEventDedupWindowSeconds,
+		WindowBucket: now.Unix() / constants.ProctorDedupWindowSeconds,
 	}
 	if err := s.proctorRepo.CreateProctorEvent(ctx, event); err != nil {
 		if errors.Is(err, repository.ErrConflict) {

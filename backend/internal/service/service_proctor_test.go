@@ -267,7 +267,7 @@ func TestProctorReportAfterWindowCreatesNewEvent(t *testing.T) {
 	// Age the stored event beyond the dedup window (occurrence time and bucket).
 	aged := time.Now().Add(-2 * proctorEventDedupWindow)
 	repo.events[0].OccurredAt = aged
-	repo.events[0].WindowBucket = aged.Unix() / proctorEventDedupWindowSeconds
+	repo.events[0].WindowBucket = aged.Unix() / constants.ProctorDedupWindowSeconds
 
 	resp, err := svc.Report(context.Background(), 100, reportReq(1, constants.ProctorEventTabSwitch))
 	if err != nil {

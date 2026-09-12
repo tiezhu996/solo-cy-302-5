@@ -26,8 +26,13 @@ func NewRepository(db *gorm.DB) *Repository {
 	return &Repository{db: db}
 }
 
-// AutoMigrate creates/updates database tables for the given models.
+// AutoMigrate creates/updates database tables for the given models. Legacy
+// proctor_events data is migrated first so the dedup unique index can be
+// created on upgraded databases without a duplicate-key startup failure.
 func (r *Repository) AutoMigrate() error {
+	if err := r.migrateLegacyProctorEvents(); err != nil {
+		return fmt.Errorf("migrate legacy proctor events: %w", err)
+	}
 	return r.db.AutoMigrate(
 		&model.User{},
 		&model.Question{},

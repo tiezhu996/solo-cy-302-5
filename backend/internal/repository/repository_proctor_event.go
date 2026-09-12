@@ -7,8 +7,98 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/gbexam/online-exam/internal/constants"
 	"github.com/gbexam/online-exam/internal/model"
 )
+
+// proctorDedupIndex is the unique index guarding concurrent reports.
+const proctorDedupIndex = "uk_proctor_dedup"
+
+// migrateLegacyProctorEvents upgrades pre-dedup-index databases so that
+// AutoMigrate can create uk_proctor_dedup without failing on duplicate key
+// errors. It is a no-op for fresh installs and already-migrated databases,
+// and is idempotent so a previously interrupted upgrade can finish on the
+// next start.
+func (r *Repository) migrateLegacyProctorEvents() error {
+	migrator := r.db.Migrator()
+	if !migrator.HasTable("proctor_events") {
+		return nil // 新库：由 AutoMigrate 直接建表和索引
+	}
+	if migrator.HasIndex(&model.ProctorEvent{}, proctorDedupIndex) {
+		return nil // 已迁移过
+	}
+
+	// 1. 补齐 window_bucket 列（旧表没有该列，或上次启动在建索引前中断）。
+	if !migrator.HasColumn(&model.ProctorEvent{}, "WindowBucket") {
+		if err := migrator.AddColumn(&model.ProctorEvent{}, "WindowBucket"); err != nil {
+			return fmt.Errorf("add window_bucket column: %w", err)
+		}
+	}
+
+	// 2. 按发生时间回填去重窗口桶（新增列默认全 0）。
+	var legacy []model.ProctorEvent
+	if err := r.db.Select("id", "occurred_at").Where("window_bucket = 0").Find(&legacy).Error; err != nil {
+		return fmt.Errorf("list legacy proctor events: %w", err)
+	}
+	for _, event := range legacy {
+		bucket := event.OccurredAt.Unix() / constants.ProctorDedupWindowSeconds
+		if err := r.db.Model(&model.ProctorEvent{}).Where("id = ?", event.ID).Update("window_bucket", bucket).Error; err != nil {
+			return fmt.Errorf("backfill window bucket for proctor event %d: %w", event.ID, err)
+		}
+	}
+
+	// 3. 合并同场次同类型同窗口的重复记录，否则唯一索引无法创建。
+	type dupGroup struct {
+		AttemptID    uint
+		Type         string
+		WindowBucket int64
+		Cnt          int64
+	}
+	var groups []dupGroup
+	if err := r.db.Model(&model.ProctorEvent{}).
+		Select("attempt_id, type, window_bucket, COUNT(*) AS cnt").
+		Group("attempt_id, type, window_bucket").
+		Having("cnt > 1").
+		Scan(&groups).Error; err != nil {
+		return fmt.Errorf("find duplicate proctor events: %w", err)
+	}
+	for _, group := range groups {
+		var rows []model.ProctorEvent
+		if err := r.db.
+			Select("id", "status").
+			Where("attempt_id = ? AND type = ? AND window_bucket = ?", group.AttemptID, group.Type, group.WindowBucket).
+			Order("id ASC").
+			Find(&rows).Error; err != nil {
+			return fmt.Errorf("list duplicate proctor events: %w", err)
+		}
+		keepID := chooseProctorEventToKeep(rows)
+		ids := make([]uint, 0, len(rows)-1)
+		for _, row := range rows {
+			if row.ID != keepID {
+				ids = append(ids, row.ID)
+			}
+		}
+		if len(ids) > 0 {
+			if err := r.db.Where("id IN ?", ids).Delete(&model.ProctorEvent{}).Error; err != nil {
+				return fmt.Errorf("delete duplicate proctor events: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// chooseProctorEventToKeep picks the surviving row of a duplicate group:
+// a reviewed event (its conclusion must not be lost) wins over pending ones,
+// ties are broken by the earliest report. rows must be ordered by id ASC.
+func chooseProctorEventToKeep(rows []model.ProctorEvent) uint {
+	keep := rows[0]
+	for _, row := range rows[1:] {
+		if keep.Status == constants.ProctorStatusPending && row.Status != constants.ProctorStatusPending {
+			keep = row
+		}
+	}
+	return keep.ID
+}
 
 // ProctorEventFilter holds optional filters for proctor event list queries.
 type ProctorEventFilter struct {

@@ -61,3 +61,9 @@ const (
 	ProctorStatusConfirmed = "confirmed"
 	ProctorStatusIgnored   = "ignored"
 )
+
+// ProctorDedupWindowSeconds is the dedup window (in seconds) for proctor
+// event reports. It sizes the window_bucket column of the uk_proctor_dedup
+// unique index, so the service layer and the legacy-data migration must
+// share this single source of truth.
+const ProctorDedupWindowSeconds int64 = 30
