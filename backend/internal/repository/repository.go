@@ -36,6 +36,7 @@ func (r *Repository) AutoMigrate() error {
 		&model.ExamAttempt{},
 		&model.Answer{},
 		&model.WrongQuestion{},
+		&model.ProctorEvent{},
 	)
 }
 

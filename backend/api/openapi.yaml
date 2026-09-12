@@ -193,3 +193,105 @@ paths:
       responses:
         '201':
           description: 创建成功
+  /api/v1/proctor-events:
+    post:
+      summary: 上报监考事件（学生，考试进行中；30 秒窗口内同人同类去重）
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attempt_id, type]
+              properties:
+                attempt_id:
+                  type: integer
+                type:
+                  type: string
+                  enum: [tab_switch, fullscreen_exit, page_leave]
+                detail:
+                  type: string
+      responses:
+        '200':
+          description: 上报成功，deduplicated=true 表示命中去重窗口
+    get:
+      summary: 监考事件列表（教师仅本人考试，管理员全部）
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, confirmed, ignored]
+        - in: query
+          name: type
+          schema:
+            type: string
+            enum: [tab_switch, fullscreen_exit, page_leave]
+        - in: query
+          name: exam_id
+          schema:
+            type: integer
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 事件分页列表
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/proctor-events/{id}:
+    get:
+      summary: 监考事件详情（教师仅本人考试，越权 403）
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 事件详情
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/proctor-events/{id}/review:
+    post:
+      summary: 提交处理结论（确认/忽略，提交后不可再改，重复提交 409）
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, note]
+              properties:
+                status:
+                  type: string
+                  enum: [confirmed, ignored]
+                note:
+                  type: string
+      responses:
+        '200':
+          description: 处理完成，返回更新后的事件
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: 该事件已处理，处理结论不可修改

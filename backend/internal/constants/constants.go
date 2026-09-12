@@ -47,3 +47,17 @@ const (
 	UserActive   = "active"
 	UserDisabled = "disabled"
 )
+
+// Proctoring event types reported from the exam page.
+const (
+	ProctorEventTabSwitch      = "tab_switch"
+	ProctorEventFullscreenExit = "fullscreen_exit"
+	ProctorEventPageLeave      = "page_leave"
+)
+
+// Proctoring event review statuses.
+const (
+	ProctorStatusPending   = "pending"
+	ProctorStatusConfirmed = "confirmed"
+	ProctorStatusIgnored   = "ignored"
+)

@@ -12,6 +12,9 @@
         <el-menu-item index="/exams">
           <el-icon><Tickets /></el-icon><span>考试管理</span>
         </el-menu-item>
+        <el-menu-item v-if="isStaff" index="/proctor-events">
+          <el-icon><View /></el-icon><span>监考复核</span>
+        </el-menu-item>
         <el-menu-item v-if="isStudent" index="/attempts">
           <el-icon><Document /></el-icon><span>考试记录</span>
         </el-menu-item>

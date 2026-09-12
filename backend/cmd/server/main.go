@@ -50,6 +50,7 @@ func main() {
 	attemptService := service.NewAttemptService(repo, repo, repo, repo, repo, logger)
 	statsService := service.NewStatsService(repo, logger)
 	wrongService := service.NewWrongQuestionService(repo, repo, logger)
+	proctorService := service.NewProctorService(repo, repo, repo, logger)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -58,7 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	server := handler.NewServer(logger, authService, userService, questionService, examService, attemptService, statsService, wrongService)
+	server := handler.NewServer(logger, authService, userService, questionService, examService, attemptService, statsService, wrongService, proctorService)
 	engine := router.New(server, middleware.Auth(authService))
 
 	srv := &http.Server{

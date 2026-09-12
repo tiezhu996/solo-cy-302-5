@@ -74,8 +74,8 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { attemptApi } from '../api'
-import type { AttemptStartResponse, ExamQuestionView, QuestionType } from '../types'
+import { attemptApi, proctorApi } from '../api'
+import type { AttemptStartResponse, ExamQuestionView, ProctorEventType, QuestionType } from '../types'
 
 const route = useRoute()
 const router = useRouter()
@@ -223,6 +223,43 @@ function exitFullscreen() {
 function onFullscreenChange() {
   if (!document.fullscreenElement && !submitted) {
     ElMessage.warning('考试已锁定全屏，请勿退出全屏（按 ESC 视为警告）')
+    reportProctorEvent('fullscreen_exit', '考试中退出全屏')
+  }
+}
+
+// 监考事件上报：切屏、退出全屏、离开页面。
+// 客户端对同类事件做 5 秒节流；服务端在 30 秒窗口内对同人同类型只保留一条。
+const lastReportAt: Record<string, number> = {}
+const REPORT_THROTTLE_MS = 5000
+
+function reportProctorEvent(type: ProctorEventType, detail: string, keepalive = false) {
+  if (submitted || !paper.attempt_id) return
+  const now = Date.now()
+  if (now - (lastReportAt[type] || 0) < REPORT_THROTTLE_MS) return
+  lastReportAt[type] = now
+  const body = JSON.stringify({ attempt_id: paper.attempt_id, type, detail })
+  if (keepalive) {
+    // 页面卸载场景用 keepalive 保证请求发出
+    fetch('/api/v1/proctor-events', {
+      method: 'POST',
+      keepalive: true,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${localStorage.getItem('gbexam_token') || ''}`
+      },
+      body
+    }).catch(() => undefined)
+    return
+  }
+  proctorApi.report({ attempt_id: paper.attempt_id, type, detail }).catch(() => {
+    // 上报失败不打断考试
+  })
+}
+
+function onVisibilityChange() {
+  if (document.hidden && !submitted && paper.attempt_id) {
+    ElMessage.warning('检测到切屏/切换标签页，已记录监考事件')
+    reportProctorEvent('tab_switch', '考试中切换标签页或窗口')
   }
 }
 
@@ -255,16 +292,20 @@ async function load() {
 
 onMounted(() => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('visibilitychange', onVisibilityChange)
   document.addEventListener('selectstart', preventSelect)
   window.addEventListener('beforeunload', onBeforeUnload)
+  window.addEventListener('pagehide', onPageLeave)
   load().catch(() => router.replace('/exams'))
 })
 
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   document.removeEventListener('selectstart', preventSelect)
   window.removeEventListener('beforeunload', onBeforeUnload)
+  window.removeEventListener('pagehide', onPageLeave)
 })
 
 function preventSelect(e: Event) {
@@ -275,12 +316,21 @@ function preventSelect(e: Event) {
 
 function onBeforeUnload() {
   if (paper.attempt_id && !submitted) {
+    // 先上报离开页面事件，再自动交卷（keepalive 按序发出，避免交卷后事件被拒）
+    reportProctorEvent('page_leave', '考试中离开或刷新页面', true)
     // 刷新/关闭页面视为交卷
     fetch(`/api/v1/attempts/${paper.attempt_id}/submit`, {
       method: 'POST',
       keepalive: true,
       headers: { Authorization: `Bearer ${localStorage.getItem('gbexam_token') || ''}` }
     })
+  }
+}
+
+function onPageLeave() {
+  if (paper.attempt_id && !submitted) {
+    // 兼容不触发 beforeunload 的导航场景；已被 beforeunload 上报的会被节流去重
+    reportProctorEvent('page_leave', '考试中离开或刷新页面', true)
   }
 }
 

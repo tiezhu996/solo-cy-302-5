@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/gbexam/online-exam/internal/model"
 	"github.com/gbexam/online-exam/internal/repository"
@@ -73,4 +74,13 @@ type StatsRepo interface {
 	CountQuestions(ctx context.Context) (int64, error)
 	CountExams(ctx context.Context) (int64, error)
 	CountAttempts(ctx context.Context) (int64, error)
+}
+
+// ProctorRepo is the proctoring-event persistence contract.
+type ProctorRepo interface {
+	CreateProctorEvent(ctx context.Context, event *model.ProctorEvent) error
+	FindRecentProctorEvent(ctx context.Context, attemptID uint, eventType string, since time.Time) (*model.ProctorEvent, error)
+	FindProctorEventByID(ctx context.Context, id uint) (*repository.ProctorEventRow, error)
+	ListProctorEvents(ctx context.Context, filter repository.ProctorEventFilter, page, pageSize int) ([]repository.ProctorEventRow, int64, error)
+	ReviewProctorEvent(ctx context.Context, id uint, status, note string, reviewerID uint, reviewedAt time.Time) error
 }

@@ -22,6 +22,7 @@ type Server struct {
 	attempts  *service.AttemptService
 	stats     *service.StatsService
 	wrong     *service.WrongQuestionService
+	proctor   *service.ProctorService
 }
 
 // NewServer constructs Server with injected services.
@@ -34,6 +35,7 @@ func NewServer(
 	attempts *service.AttemptService,
 	stats *service.StatsService,
 	wrong *service.WrongQuestionService,
+	proctor *service.ProctorService,
 ) *Server {
 	return &Server{
 		logger:    logger,
@@ -44,6 +46,7 @@ func NewServer(
 		attempts:  attempts,
 		stats:     stats,
 		wrong:     wrong,
+		proctor:   proctor,
 	}
 }
 
@@ -63,6 +66,8 @@ func (s *Server) respondError(c *gin.Context, err error) {
 		httpx.Fail(c, http.StatusNotFound, constants.CodeNotFound, "资源不存在")
 	case errors.Is(err, service.ErrConflict):
 		httpx.Fail(c, http.StatusConflict, constants.CodeConflict, "资源冲突")
+	case errors.Is(err, service.ErrAlreadyReviewed):
+		httpx.Fail(c, http.StatusConflict, constants.CodeConflict, "该事件已处理，处理结论不可修改")
 	case errors.Is(err, service.ErrUnauthorized):
 		httpx.Fail(c, http.StatusUnauthorized, constants.CodeUnauthorized, "认证失败")
 	case errors.Is(err, service.ErrForbidden):

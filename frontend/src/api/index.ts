@@ -11,6 +11,10 @@ import type {
   PageResult,
   PracticeResultResponse,
   PracticeQuestion,
+  ProctorEvent,
+  ProctorEventReportResponse,
+  ProctorEventStatus,
+  ProctorEventType,
   Question,
   ReportResponse,
   UserProfile,
@@ -136,5 +140,20 @@ export const wrongApi = {
 export const statsApi = {
   overview() {
     return http.get<never, OverviewResponse>('/stats/overview')
+  }
+}
+
+export const proctorApi = {
+  report(data: { attempt_id: number; type: ProctorEventType; detail?: string }) {
+    return http.post<never, ProctorEventReportResponse>('/proctor-events', data)
+  },
+  list(params: { page?: number; page_size?: number; status?: ProctorEventStatus | ''; type?: ProctorEventType | ''; exam_id?: number }) {
+    return http.get<never, PageResult<ProctorEvent>>('/proctor-events', { params })
+  },
+  detail(id: number) {
+    return http.get<never, ProctorEvent>(`/proctor-events/${id}`)
+  },
+  review(id: number, data: { status: 'confirmed' | 'ignored'; note: string }) {
+    return http.post<never, ProctorEvent>(`/proctor-events/${id}/review`, data)
   }
 }

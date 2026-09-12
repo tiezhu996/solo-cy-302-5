@@ -210,3 +210,29 @@ export interface PracticeResultResponse {
   correct: number
   items: { question_id: number; correct: boolean; score: number }[]
 }
+
+export type ProctorEventType = 'tab_switch' | 'fullscreen_exit' | 'page_leave'
+export type ProctorEventStatus = 'pending' | 'confirmed' | 'ignored'
+
+export interface ProctorEvent {
+  id: number
+  attempt_id: number
+  exam_id: number
+  exam_title: string
+  student_id: number
+  student_name: string
+  type: ProctorEventType
+  detail: string
+  status: ProctorEventStatus
+  occurred_at: string
+  review_note: string
+  reviewed_by: number
+  reviewer_name: string
+  reviewed_at?: string | null
+  created_at: string
+}
+
+export interface ProctorEventReportResponse {
+  event: ProctorEvent
+  deduplicated: boolean
+}
