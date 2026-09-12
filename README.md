@@ -58,6 +58,16 @@ go run ./cmd/server
 
 后端默认监听 `8080`，并通过环境变量读取配置（可参考根目录 `.env.example`）。
 
+### 测试
+
+```bash
+cd backend
+go test ./...
+```
+
+- `internal/service`、`internal/repository`：表驱动单元测试（上报去重窗口、越权、结论不可改等）。
+- `internal/e2etest`：监考复核中心端到端测试，基于内存 SQLite 启动完整 HTTP 栈（无需 MySQL），覆盖新库启动并发上报去重、旧库重复数据自动迁移（已处理结论保留）、教师越权与已处理事件重复修改拒绝；每个测试独立库，可 `go test -count=N` 稳定重复运行。
+
 ### 前端
 
 ```bash
