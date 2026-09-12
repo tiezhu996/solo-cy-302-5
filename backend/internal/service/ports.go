@@ -80,6 +80,7 @@ type StatsRepo interface {
 type ProctorRepo interface {
 	CreateProctorEvent(ctx context.Context, event *model.ProctorEvent) error
 	FindRecentProctorEvent(ctx context.Context, attemptID uint, eventType string, since time.Time) (*model.ProctorEvent, error)
+	FindProctorEventByDedupKey(ctx context.Context, attemptID uint, eventType string, bucket int64) (*repository.ProctorEventRow, error)
 	FindProctorEventByID(ctx context.Context, id uint) (*repository.ProctorEventRow, error)
 	ListProctorEvents(ctx context.Context, filter repository.ProctorEventFilter, page, pageSize int) ([]repository.ProctorEventRow, int64, error)
 	ReviewProctorEvent(ctx context.Context, id uint, status, note string, reviewerID uint, reviewedAt time.Time) error

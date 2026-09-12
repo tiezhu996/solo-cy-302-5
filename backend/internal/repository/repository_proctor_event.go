@@ -49,12 +49,29 @@ func (r *Repository) proctorEventBaseQuery(ctx context.Context, filter ProctorEv
 
 const proctorEventSelect = "proctor_events.*, exams.title AS exam_title, users.name AS student_name, reviewers.name AS reviewer_name"
 
-// CreateProctorEvent inserts a proctor event.
+// CreateProctorEvent inserts a proctor event. A duplicate
+// (attempt_id, type, window_bucket) is reported as ErrConflict so the
+// service can answer concurrent repeated reports with the stored event.
 func (r *Repository) CreateProctorEvent(ctx context.Context, event *model.ProctorEvent) error {
 	if err := r.db.WithContext(ctx).Create(event).Error; err != nil {
-		return fmt.Errorf("create proctor event: %w", err)
+		return wrapQuery("create proctor event", err)
 	}
 	return nil
+}
+
+// FindProctorEventByDedupKey returns the event stored for one dedup bucket,
+// used after a unique-index conflict to answer the concurrent loser.
+func (r *Repository) FindProctorEventByDedupKey(ctx context.Context, attemptID uint, eventType string, bucket int64) (*ProctorEventRow, error) {
+	var row ProctorEventRow
+	err := r.proctorEventBaseQuery(ctx, ProctorEventFilter{}).
+		Select(proctorEventSelect).
+		Where("proctor_events.attempt_id = ? AND proctor_events.type = ? AND proctor_events.window_bucket = ?", attemptID, eventType, bucket).
+		Order("proctor_events.id ASC").
+		First(&row).Error
+	if err != nil {
+		return nil, wrapQuery("find proctor event by dedup key", err)
+	}
+	return &row, nil
 }
 
 // FindRecentProctorEvent returns the newest event of the same attempt and type

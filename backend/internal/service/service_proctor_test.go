@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,8 +15,11 @@ import (
 	"github.com/gbexam/online-exam/internal/repository"
 )
 
-// fakeProctorRepo is an in-memory ProctorRepo for service tests.
+// fakeProctorRepo is an in-memory ProctorRepo for service tests. It enforces
+// the (attempt_id, type, window_bucket) unique key atomically, mirroring the
+// database unique index that guards concurrent reports.
 type fakeProctorRepo struct {
+	mu      sync.Mutex
 	events  []model.ProctorEvent
 	exams   *fakeExamRepo
 	nextID  uint
@@ -27,6 +31,13 @@ func newFakeProctorRepo(exams *fakeExamRepo) *fakeProctorRepo {
 }
 
 func (f *fakeProctorRepo) CreateProctorEvent(_ context.Context, event *model.ProctorEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.events {
+		if e.AttemptID == event.AttemptID && e.Type == event.Type && e.WindowBucket == event.WindowBucket {
+			return repository.ErrConflict
+		}
+	}
 	event.ID = f.nextID
 	f.nextID++
 	f.events = append(f.events, *event)
@@ -34,6 +45,8 @@ func (f *fakeProctorRepo) CreateProctorEvent(_ context.Context, event *model.Pro
 }
 
 func (f *fakeProctorRepo) FindRecentProctorEvent(_ context.Context, attemptID uint, eventType string, since time.Time) (*model.ProctorEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i := len(f.events) - 1; i >= 0; i-- {
 		e := f.events[i]
 		if e.AttemptID == attemptID && e.Type == eventType && !e.OccurredAt.Before(since) {
@@ -43,7 +56,20 @@ func (f *fakeProctorRepo) FindRecentProctorEvent(_ context.Context, attemptID ui
 	return nil, repository.ErrNotFound
 }
 
+func (f *fakeProctorRepo) FindProctorEventByDedupKey(_ context.Context, attemptID uint, eventType string, bucket int64) (*repository.ProctorEventRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.events {
+		if e.AttemptID == attemptID && e.Type == eventType && e.WindowBucket == bucket {
+			return &repository.ProctorEventRow{ProctorEvent: e}, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
 func (f *fakeProctorRepo) FindProctorEventByID(_ context.Context, id uint) (*repository.ProctorEventRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, e := range f.events {
 		if e.ID == id {
 			return &repository.ProctorEventRow{ProctorEvent: e}, nil
@@ -53,6 +79,8 @@ func (f *fakeProctorRepo) FindProctorEventByID(_ context.Context, id uint) (*rep
 }
 
 func (f *fakeProctorRepo) ListProctorEvents(_ context.Context, filter repository.ProctorEventFilter, _, _ int) ([]repository.ProctorEventRow, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	rows := make([]repository.ProctorEventRow, 0, len(f.events))
 	for _, e := range f.events {
 		if filter.Status != "" && e.Status != filter.Status {
@@ -76,6 +104,8 @@ func (f *fakeProctorRepo) ListProctorEvents(_ context.Context, filter repository
 }
 
 func (f *fakeProctorRepo) ReviewProctorEvent(_ context.Context, id uint, status, note string, reviewerID uint, reviewedAt time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i := range f.events {
 		if f.events[i].ID != id {
 			continue
@@ -91,6 +121,12 @@ func (f *fakeProctorRepo) ReviewProctorEvent(_ context.Context, id uint, status,
 		return nil
 	}
 	return repository.ErrNotFound
+}
+
+func (f *fakeProctorRepo) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.events)
 }
 
 // fakeAttemptRepo serves a fixed set of attempts.
@@ -228,8 +264,10 @@ func TestProctorReportAfterWindowCreatesNewEvent(t *testing.T) {
 	if _, err := svc.Report(context.Background(), 100, reportReq(1, constants.ProctorEventTabSwitch)); err != nil {
 		t.Fatalf("first Report: %v", err)
 	}
-	// Age the stored event beyond the dedup window.
-	repo.events[0].OccurredAt = time.Now().Add(-2 * proctorEventDedupWindow)
+	// Age the stored event beyond the dedup window (occurrence time and bucket).
+	aged := time.Now().Add(-2 * proctorEventDedupWindow)
+	repo.events[0].OccurredAt = aged
+	repo.events[0].WindowBucket = aged.Unix() / proctorEventDedupWindowSeconds
 
 	resp, err := svc.Report(context.Background(), 100, reportReq(1, constants.ProctorEventTabSwitch))
 	if err != nil {
@@ -254,6 +292,54 @@ func TestProctorReportGuards(t *testing.T) {
 	}
 	if _, err := svc.Report(context.Background(), 100, reportReq(404, constants.ProctorEventTabSwitch)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("report for missing attempt: err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestProctorReportConcurrentDedup fires many simultaneous reports of the
+// same attempt and type: exactly one event may be stored, exactly one caller
+// gets Deduplicated=false, and every caller sees the same event ID.
+func TestProctorReportConcurrentDedup(t *testing.T) {
+	svc, repo := newProctorTestService()
+	const workers = 32
+
+	var wg sync.WaitGroup
+	responses := make([]*dto.ProctorEventReportResponse, workers)
+	errs := make([]error, workers)
+	start := make(chan struct{})
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			responses[i], errs[i] = svc.Report(context.Background(), 100, reportReq(1, constants.ProctorEventTabSwitch))
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	fresh := 0
+	var wantID uint
+	for i := 0; i < workers; i++ {
+		if errs[i] != nil {
+			t.Fatalf("concurrent Report %d: %v", i, errs[i])
+		}
+		if responses[i] == nil {
+			t.Fatalf("concurrent Report %d: nil response", i)
+		}
+		if !responses[i].Deduplicated {
+			fresh++
+		}
+		if wantID == 0 {
+			wantID = responses[i].Event.ID
+		} else if responses[i].Event.ID != wantID {
+			t.Fatalf("response %d sees event %d, want shared event %d", i, responses[i].Event.ID, wantID)
+		}
+	}
+	if fresh != 1 {
+		t.Fatalf("non-deduplicated responses = %d, want exactly 1", fresh)
+	}
+	if got := repo.count(); got != 1 {
+		t.Fatalf("stored events = %d, want 1", got)
 	}
 }
 

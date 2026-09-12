@@ -20,6 +20,10 @@ var ErrAlreadyReviewed = errors.New("proctor event already reviewed")
 // same attempt and type are merged into the first stored event.
 const proctorEventDedupWindow = 30 * time.Second
 
+// proctorEventDedupWindowSeconds is the dedup window in seconds, used to
+// bucket reports for the unique index that guards concurrent inserts.
+const proctorEventDedupWindowSeconds = int64(proctorEventDedupWindow / time.Second)
+
 // ProctorService is the review center for anti-cheating events: students
 // report events during an exam, teachers handle events of their own exams,
 // and admins can browse every handling record.
@@ -37,7 +41,10 @@ func NewProctorService(proctorRepo ProctorRepo, attemptRepo AttemptRepo, examRep
 
 // Report stores one event for an in-progress attempt of the calling student.
 // Reports of the same attempt and type within the dedup window keep only the
-// first event and are answered with Deduplicated=true.
+// first event and are answered with Deduplicated=true. Deduplication is
+// enforced twice: a sliding-window pre-check for the common case, and a
+// unique index on (attempt_id, type, window_bucket) that makes concurrent
+// reports in the same bucket fail safely into the deduplicated response.
 func (s *ProctorService) Report(ctx context.Context, studentID uint, req dto.ProctorEventReportRequest) (*dto.ProctorEventReportResponse, error) {
 	attempt, err := s.attemptRepo.FindAttemptByID(ctx, req.AttemptID)
 	if err != nil {
@@ -60,18 +67,32 @@ func (s *ProctorService) Report(ctx context.Context, studentID uint, req dto.Pro
 	}
 
 	event := &model.ProctorEvent{
-		AttemptID:  attempt.ID,
-		ExamID:     attempt.ExamID,
-		StudentID:  studentID,
-		Type:       req.Type,
-		Detail:     req.Detail,
-		Status:     constants.ProctorStatusPending,
-		OccurredAt: now,
+		AttemptID:    attempt.ID,
+		ExamID:       attempt.ExamID,
+		StudentID:    studentID,
+		Type:         req.Type,
+		Detail:       req.Detail,
+		Status:       constants.ProctorStatusPending,
+		OccurredAt:   now,
+		WindowBucket: now.Unix() / proctorEventDedupWindowSeconds,
 	}
 	if err := s.proctorRepo.CreateProctorEvent(ctx, event); err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			// 并发上报命中唯一约束：返回先入库的那条事件
+			return s.deduplicatedReport(ctx, attempt.ID, req.Type, event.WindowBucket)
+		}
 		return nil, fmt.Errorf("create proctor event: %w", err)
 	}
 	return s.reportResponse(ctx, event.ID, false)
+}
+
+// deduplicatedReport loads the event that won the concurrent insert race.
+func (s *ProctorService) deduplicatedReport(ctx context.Context, attemptID uint, eventType string, bucket int64) (*dto.ProctorEventReportResponse, error) {
+	row, err := s.proctorRepo.FindProctorEventByDedupKey(ctx, attemptID, eventType, bucket)
+	if err != nil {
+		return nil, fmt.Errorf("find deduplicated proctor event: %w", err)
+	}
+	return &dto.ProctorEventReportResponse{Event: proctorRowToResponse(row), Deduplicated: true}, nil
 }
 
 func (s *ProctorService) reportResponse(ctx context.Context, id uint, deduplicated bool) (*dto.ProctorEventReportResponse, error) {

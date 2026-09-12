@@ -69,7 +69,9 @@ func isDuplicateKey(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "duplicate entry")
+	msg := strings.ToLower(err.Error())
+	// MySQL: "duplicate entry ..."; SQLite (tests): "unique constraint failed ..."
+	return strings.Contains(msg, "duplicate entry") || strings.Contains(msg, "unique constraint failed")
 }
 
 func isRecordNotFound(err error) bool {
